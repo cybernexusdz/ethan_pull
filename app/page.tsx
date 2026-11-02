@@ -19,9 +19,9 @@ export default async function Home() {
   const [membersResult, departmentsResult] = await Promise.all([
     supabase
       .from('members')
-      .select('id, name, telegram_id, telegram_username, department_id, created_at, department:departments(name)')
+      .select('id, name, telegram_id, telegram_username, department_id, department:departments(name)')
       .order('name'),
-    supabase.from('departments').select('id, name, telegram_title_ar, created_at').order('name'),
+    supabase.from('departments').select('id, name, telegram_title_ar').order('name'),
   ])
 
   return (

@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useState, type FormEvent } from 'react'
+import { useMemo, useState, type FormEvent } from 'react'
 import { useRouter } from 'next/navigation'
 import {
   AtSign,
@@ -17,10 +17,16 @@ import {
 import { createClient } from '@/lib/client'
 import type { Database } from '@/lib/database.types'
 
-type Member = Database['public']['Tables']['members']['Row'] & {
+type Member = Pick<
+  Database['public']['Tables']['members']['Row'],
+  'id' | 'name' | 'telegram_id' | 'telegram_username' | 'department_id'
+> & {
   department: { name: string } | null
 }
-type Department = Database['public']['Tables']['departments']['Row']
+type Department = Pick<
+  Database['public']['Tables']['departments']['Row'],
+  'id' | 'name' | 'telegram_title_ar'
+>
 type MemberInput = {
   name: string
   telegram_id: string | null
@@ -55,8 +61,8 @@ export function MembersApp({
   loadError,
 }: MembersAppProps) {
   const router = useRouter()
-  const [members, setMembers] = useState(initialMembers)
-  const [departments, setDepartments] = useState(initialDepartments)
+  const members = initialMembers
+  const departments = initialDepartments
   const [activeView, setActiveView] = useState<'members' | 'departments'>('members')
   const [search, setSearch] = useState('')
   const [memberDialogOpen, setMemberDialogOpen] = useState(false)
@@ -65,9 +71,6 @@ export function MembersApp({
   const [editingDepartment, setEditingDepartment] = useState<Department | null>(null)
   const [actionError, setActionError] = useState('')
   const [signingOut, setSigningOut] = useState(false)
-
-  useEffect(() => setMembers(initialMembers), [initialMembers])
-  useEffect(() => setDepartments(initialDepartments), [initialDepartments])
 
   const filteredMembers = useMemo(() => {
     const query = search.trim().toLowerCase()
@@ -82,6 +85,21 @@ export function MembersApp({
       ].some((value) => value.toLowerCase().includes(query)),
     )
   }, [members, search])
+
+  const departmentMemberCounts = useMemo(() => {
+    const counts = new Map<string, number>()
+
+    for (const member of members) {
+      if (member.department_id) {
+        counts.set(
+          member.department_id,
+          (counts.get(member.department_id) ?? 0) + 1,
+        )
+      }
+    }
+
+    return counts
+  }, [members])
 
   async function saveMember(input: MemberInput) {
     const supabase = createClient()
@@ -125,7 +143,7 @@ export function MembersApp({
   }
 
   async function deleteDepartment(department: Department) {
-    const assignedCount = members.filter((member) => member.department_id === department.id).length
+    const assignedCount = departmentMemberCounts.get(department.id) ?? 0
     const message = assignedCount
       ? `Remove ${department.name}? ${assignedCount} member${assignedCount === 1 ? '' : 's'} will become unassigned.`
       : `Remove ${department.name}?`
@@ -257,7 +275,7 @@ export function MembersApp({
             <div className="notice notice-error" role="alert">
               <strong>Could not load your directory.</strong>
               <span>{loadError}</span>
-              <span>Run <code>supabase/schema.sql</code> in your Supabase SQL Editor, then refresh.</span>
+              <span>Apply your database migrations with <code>supabase db push</code>, then refresh.</span>
             </div>
           )}
           {actionError && <div className="notice notice-error" role="alert">{actionError}</div>}
@@ -362,7 +380,7 @@ export function MembersApp({
               {departments.length ? (
                 <div className="department-list">
                   {departments.map((department) => {
-                    const count = members.filter((member) => member.department_id === department.id).length
+                    const count = departmentMemberCounts.get(department.id) ?? 0
                     return (
                       <article className="department-row" key={department.id}>
                         <div className="department-icon"><Building2 size={19} /></div>
