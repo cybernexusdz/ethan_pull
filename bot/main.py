@@ -337,10 +337,16 @@ class DirectoryBot:
             return mention, entity
         return None
 
-    def send_member_mentions(self, chat_id: int, command: str) -> None:
+    def send_member_mentions(
+        self, chat_id: int, command: str, message_thread_id: int | None = None
+    ) -> None:
         department_name = self.departments.get(command)
         if department_name is None:
-            self.send_text(chat_id, "That department command is no longer available. Try /help.")
+            self.send_text(
+                chat_id,
+                "That department command is no longer available. Try /help.",
+                message_thread_id=message_thread_id,
+            )
             return
 
         department = next(
@@ -348,7 +354,11 @@ class DirectoryBot:
             None,
         )
         if department is None:
-            self.send_text(chat_id, "I couldn't find that department. Try again after the next refresh.")
+            self.send_text(
+                chat_id,
+                "I couldn't find that department. Try again after the next refresh.",
+                message_thread_id=message_thread_id,
+            )
             return
 
         department_id = department.get("id")
@@ -362,14 +372,18 @@ class DirectoryBot:
             str(department.get("telegram_title_ar") or f"نــداء الى أعضاء {department_name}"),
             members,
             "لا يوجد أعضاء لديهم بيانات تواصل عبر تيليجرام في هذا القسم.",
+            message_thread_id,
         )
 
-    def send_all_mentions(self, chat_id: int) -> None:
+    def send_all_mentions(
+        self, chat_id: int, message_thread_id: int | None = None
+    ) -> None:
         self.send_mentions(
             chat_id,
             ALL_MEMBERS_TITLE,
             self.members,
             "لا يوجد أعضاء لديهم بيانات تواصل عبر تيليجرام.",
+            message_thread_id,
         )
 
     def send_mentions(
@@ -378,6 +392,7 @@ class DirectoryBot:
         title: str,
         members: list[dict[str, Any]],
         empty_message: str,
+        message_thread_id: int | None = None,
     ) -> None:
         lines = [
             line
@@ -385,7 +400,9 @@ class DirectoryBot:
             if (line := self.member_line(member)) is not None
         ]
         if not lines:
-            self.send_text(chat_id, empty_message)
+            self.send_text(
+                chat_id, empty_message, message_thread_id=message_thread_id
+            )
             return
 
         header = title
@@ -438,10 +455,16 @@ class DirectoryBot:
                 }
             )
             entities.sort(key=lambda entity: (entity["offset"], -entity["length"]))
-            self.send_text(chat_id, text, entities)
+            self.send_text(
+                chat_id,
+                text,
+                entities,
+                message_thread_id=message_thread_id,
+            )
 
     def send_text(self, chat_id: int, text: str,
-                  entities: list[dict[str, Any]] | None = None) -> None:
+                  entities: list[dict[str, Any]] | None = None,
+                  *, message_thread_id: int | None = None) -> None:
         payload: dict[str, Any] = {
             "chat_id": chat_id,
             "text": text,
@@ -449,6 +472,8 @@ class DirectoryBot:
         }
         if entities:
             payload["entities"] = entities
+        if message_thread_id is not None:
+            payload["message_thread_id"] = message_thread_id
         self.telegram("sendMessage", payload)
 
     def handle_message(self, message: dict[str, Any]) -> None:
@@ -462,26 +487,48 @@ class DirectoryBot:
         command = self.command_from_message(message, self.bot_username)
         if command is None:
             return
+        thread_id = message.get("message_thread_id")
+        if not isinstance(thread_id, int) or isinstance(thread_id, bool):
+            thread_id = None
         if command == "start":
             self.send_text(
                 chat_id,
                 "Welcome to the member directory bot. Use /help to see commands for your departments.",
+                message_thread_id=thread_id,
             )
         elif command == "help":
-            if not self.refresh_for_command(chat_id, command):
+            if not self.refresh_for_command(chat_id, command, thread_id):
                 return
-            self.send_text(chat_id, self.help_text())
+            self.send_text(
+                chat_id, self.help_text(), message_thread_id=thread_id
+            )
         else:
-            if not self.refresh_for_command(chat_id, command):
+            if not self.refresh_for_command(chat_id, command, thread_id):
                 return
+            target_thread_id = (
+                thread_id if chat_id == self.settings.target_group_id else None
+            )
             if command == "all":
-                self.send_all_mentions(self.settings.target_group_id)
+                self.send_all_mentions(
+                    self.settings.target_group_id, target_thread_id
+                )
             elif command in self.departments:
-                self.send_member_mentions(self.settings.target_group_id, command)
+                self.send_member_mentions(
+                    self.settings.target_group_id, command, target_thread_id
+                )
             else:
-                self.send_text(chat_id, "Unknown command. Try /help.")
+                self.send_text(
+                    chat_id,
+                    "Unknown command. Try /help.",
+                    message_thread_id=thread_id,
+                )
 
-    def refresh_for_command(self, chat_id: int, command: str) -> bool:
+    def refresh_for_command(
+        self,
+        chat_id: int,
+        command: str,
+        message_thread_id: int | None = None,
+    ) -> bool:
         try:
             if command == "help":
                 self.refresh_departments()
@@ -508,6 +555,7 @@ class DirectoryBot:
             self.send_text(
                 chat_id,
                 "I couldn't refresh the directory, so no mentions were sent. Please try again.",
+                message_thread_id=message_thread_id,
             )
             return False
 
