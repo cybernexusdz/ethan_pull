@@ -21,7 +21,7 @@ POLL_TIMEOUT = 30
 REFRESH_INTERVAL = 300
 PAGE_SIZE = 1000
 MAX_MESSAGE_UNITS = 3900
-RESERVED_COMMANDS = {"all"}
+RESERVED_COMMANDS = {"start", "help", "all"}
 ALL_MEMBERS_TITLE = "📢 نــداء الى عمــوم الوحــدات"
 
 logging.basicConfig(
@@ -161,11 +161,19 @@ class DirectoryBot:
             timeout=timeout,
         )
 
-    def supabase_rows(self, table: str, columns: str) -> list[dict[str, Any]]:
+    def supabase_rows(
+        self,
+        table: str,
+        columns: str,
+        filters: dict[str, str] | None = None,
+    ) -> list[dict[str, Any]]:
         rows: list[dict[str, Any]] = []
         offset = 0
         while True:
-            query = urlencode({"select": columns, "order": "id"})
+            query_parameters = {"select": columns, "order": "id"}
+            if filters:
+                query_parameters.update(filters)
+            query = urlencode(query_parameters)
             request = Request(
                 f"{self.supabase_url}/{table}?{query}",
                 headers={
@@ -227,11 +235,8 @@ class DirectoryBot:
             )
         return commands
 
-    def refresh_directory(self) -> None:
+    def refresh_departments(self) -> None:
         departments = self.supabase_rows("departments", "id,name,telegram_title_ar")
-        members = self.supabase_rows(
-            "members", "name,telegram_id,telegram_username,department_id"
-        )
         commands = self.build_commands(departments)
         menu = [
             {"command": "start", "description": "Show bot instructions"},
@@ -251,13 +256,24 @@ class DirectoryBot:
             self.registered_menu = menu
         self.department_rows = departments
         self.departments = commands
-        self.members = members
+
+    def refresh_members(self, department_id: str | None = None) -> None:
+        filters = {"department_id": f"eq.{department_id}"} if department_id else None
+        self.members = self.supabase_rows(
+            "members",
+            "name,telegram_id,telegram_username,department_id",
+            filters,
+        )
+
+    def refresh_directory(self) -> None:
+        self.refresh_departments()
+        self.refresh_members()
         self.last_refresh = time.monotonic()
         logger.info(
             "Loaded %d departments and %d members; registered %d department commands.",
-            len(departments),
-            len(members),
-            len(commands),
+            len(self.department_rows),
+            len(self.members),
+            len(self.departments),
         )
 
     def refresh_if_due(self) -> None:
@@ -373,26 +389,56 @@ class DirectoryBot:
             return
 
         header = title
-        current_text = header
-        current_entities: list[dict[str, Any]] = []
+        prefix = f"{header}\n"
+        prefix_units = self.text_units(prefix)
+        chunks: list[list[tuple[str, dict[str, Any]]]] = []
+        current_chunk: list[tuple[str, dict[str, Any]]] = []
+        current_units = prefix_units
+
         for line, entity in lines:
-            candidate = f"{current_text}\n{line}"
-            if self.text_units(candidate) > MAX_MESSAGE_UNITS and current_entities:
-                self.send_text(chat_id, current_text, current_entities)
-                current_text = f"{header}\n{line}"
-                entity = {
-                    **entity,
-                    "offset": self.text_units(f"{header}\n") + entity["offset"],
+            separator_units = 1 if current_chunk else 0
+            line_units = self.text_units(line)
+            if (
+                current_chunk
+                and current_units + separator_units + line_units > MAX_MESSAGE_UNITS
+            ):
+                chunks.append(current_chunk)
+                current_chunk = []
+                current_units = prefix_units
+                separator_units = 0
+
+            current_units += separator_units + line_units
+            current_chunk.append((line, entity))
+
+        if current_chunk:
+            chunks.append(current_chunk)
+
+        for chunk in chunks:
+            body = "\n".join(line for line, _ in chunk)
+            text = f"{prefix}{body}"
+            entities: list[dict[str, Any]] = []
+            body_offset = prefix_units
+
+            for index, (line, entity) in enumerate(chunk):
+                entities.append(
+                    {
+                        **entity,
+                        "offset": body_offset + entity["offset"],
+                    }
+                )
+                body_offset += self.text_units(line)
+                if index < len(chunk) - 1:
+                    body_offset += 1
+
+            entities.append(
+                {
+                    "type": "expandable_blockquote",
+                    "offset": prefix_units,
+                    "length": self.text_units(body),
                 }
-                current_entities = [entity]
-            else:
-                entity = {
-                    **entity,
-                    "offset": self.text_units(current_text + "\n") + entity["offset"],
-                }
-                current_text = candidate
-                current_entities.append(entity)
-        self.send_text(chat_id, current_text, current_entities)
+            )
+            entities.sort(key=lambda entity: (entity["offset"], -entity["length"]))
+            self.send_text(chat_id, text, entities)
 
     def send_text(self, chat_id: int, text: str,
                   entities: list[dict[str, Any]] | None = None) -> None:
@@ -422,11 +468,11 @@ class DirectoryBot:
                 "Welcome to the member directory bot. Use /help to see commands for your departments.",
             )
         elif command == "help":
-            if not self.refresh_for_command(chat_id):
+            if not self.refresh_for_command(chat_id, command):
                 return
             self.send_text(chat_id, self.help_text())
         else:
-            if not self.refresh_for_command(chat_id):
+            if not self.refresh_for_command(chat_id, command):
                 return
             if command == "all":
                 self.send_all_mentions(self.settings.target_group_id)
@@ -435,9 +481,27 @@ class DirectoryBot:
             else:
                 self.send_text(chat_id, "Unknown command. Try /help.")
 
-    def refresh_for_command(self, chat_id: int) -> bool:
+    def refresh_for_command(self, chat_id: int, command: str) -> bool:
         try:
-            self.refresh_directory()
+            if command == "help":
+                self.refresh_departments()
+            elif command == "all":
+                self.refresh_members()
+            else:
+                self.refresh_departments()
+                department_name = self.departments.get(command)
+                department = next(
+                    (
+                        row
+                        for row in self.department_rows
+                        if row.get("name") == department_name
+                    ),
+                    None,
+                )
+                if department is None:
+                    self.members = []
+                else:
+                    self.refresh_members(str(department["id"]))
             return True
         except ApiError as error:
             logger.error("Could not refresh the directory before handling a command: %s", error)
