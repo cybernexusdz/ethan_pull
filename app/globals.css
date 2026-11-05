@@ -720,6 +720,65 @@
   cursor: pointer;
 }
 
+.member-card-toolbar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(330px, 430px);
+  gap: 24px;
+  padding: 18px 20px;
+}
+
+.member-card-toolbar h2 {
+  font-size: 15px;
+}
+
+.member-card-toolbar p {
+  font-size: 11px;
+}
+
+.member-list-controls {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr);
+  gap: 10px;
+}
+
+.department-filter {
+  display: flex;
+  min-width: 0;
+  height: 40px;
+  align-items: center;
+  gap: 9px;
+  padding: 0 11px;
+  border: 1px solid #e6e8ef;
+  border-radius: 7px;
+  background: #fbfbfd;
+  color: #858da0;
+  transition: border-color 140ms, box-shadow 140ms, background 140ms;
+}
+
+.department-filter:focus-within {
+  border-color: #aeb4f4;
+  box-shadow: 0 0 0 3px rgb(91 101 237 / 8%);
+  background: #fff;
+}
+
+.department-filter select {
+  width: 100%;
+  min-width: 0;
+  flex: 1;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: #384158;
+  font-size: 12px;
+}
+
+.department-filter-chevron {
+  flex: 0 0 auto;
+  color: #858da0;
+  pointer-events: none;
+}
+
 .directory-table {
   width: 100%;
   border-collapse: collapse;
@@ -801,6 +860,12 @@
 .unassigned {
   color: #a1a6b4;
   font-size: 10px;
+}
+
+.member-departments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
 }
 
 .row-actions {
@@ -1032,6 +1097,57 @@
   appearance: auto;
 }
 
+.department-checkboxes {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 3px 0 0;
+  padding: 0;
+  border: 0;
+}
+
+.department-checkboxes legend {
+  margin-bottom: 8px;
+  color: #353d54;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.department-checkbox-list {
+  display: grid;
+  max-height: 180px;
+  gap: 4px;
+  overflow-y: auto;
+}
+
+.modal-form .department-option {
+  display: flex;
+  min-height: 36px;
+  align-items: center;
+  gap: 9px;
+  padding: 0 10px;
+  border: 1px solid #e8eaf0;
+  border-radius: 7px;
+  color: #353d54;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.modal-form .department-option input {
+  width: 15px;
+  min-height: 15px;
+  margin: 0;
+  padding: 0;
+  accent-color: #626de7;
+}
+
+.department-options-empty {
+  margin: 0;
+  color: #848b9e;
+  font-size: 12px;
+}
+
 .modal-actions {
   display: flex;
   justify-content: end;
@@ -1214,9 +1330,19 @@
     padding: 13px;
   }
 
+  .member-card-toolbar {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 12px;
+  }
+
+  .member-list-controls {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
   .search-field {
-    width: 42%;
-    min-width: 125px;
+    width: 100%;
+    min-width: 0;
+    height: 40px;
   }
 
   .table-scroll {

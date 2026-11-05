@@ -166,11 +166,12 @@ class DirectoryBot:
         table: str,
         columns: str,
         filters: dict[str, str] | None = None,
+        order_by: str = "id",
     ) -> list[dict[str, Any]]:
         rows: list[dict[str, Any]] = []
         offset = 0
         while True:
-            query_parameters = {"select": columns, "order": "id"}
+            query_parameters = {"select": columns, "order": order_by}
             if filters:
                 query_parameters.update(filters)
             query = urlencode(query_parameters)
@@ -258,12 +259,24 @@ class DirectoryBot:
         self.departments = commands
 
     def refresh_members(self, department_id: str | None = None) -> None:
-        filters = {"department_id": f"eq.{department_id}"} if department_id else None
-        self.members = self.supabase_rows(
-            "members",
-            "name,telegram_id,telegram_username,department_id",
-            filters,
+        if department_id is None:
+            self.members = self.supabase_rows(
+                "members",
+                "id,name,telegram_id,telegram_username",
+            )
+            return
+
+        assignments = self.supabase_rows(
+            "member_departments",
+            "member_id,member:members(id,name,telegram_id,telegram_username)",
+            {"department_id": f"eq.{department_id}"},
+            order_by="member_id",
         )
+        self.members = [
+            member
+            for assignment in assignments
+            if isinstance((member := assignment.get("member")), dict)
+        ]
 
     def refresh_directory(self) -> None:
         self.refresh_departments()
@@ -362,15 +375,10 @@ class DirectoryBot:
             return
 
         department_id = department.get("id")
-        members = [
-            member
-            for member in self.members
-            if member.get("department_id") == department_id
-        ]
         self.send_mentions(
             chat_id,
             str(department.get("telegram_title_ar") or f"نــداء الى أعضاء {department_name}"),
-            members,
+            self.members,
             "لا يوجد أعضاء لديهم بيانات تواصل عبر تيليجرام في هذا القسم.",
             message_thread_id,
         )

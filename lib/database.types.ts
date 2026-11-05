@@ -28,7 +28,6 @@ export type Database = {
           name: string
           telegram_id: string | null
           telegram_username: string | null
-          department_id: string | null
           created_at: string
         }
         Insert: {
@@ -36,7 +35,6 @@ export type Database = {
           name: string
           telegram_id?: string | null
           telegram_username?: string | null
-          department_id?: string | null
           created_at?: string
         }
         Update: {
@@ -44,22 +42,54 @@ export type Database = {
           name?: string
           telegram_id?: string | null
           telegram_username?: string | null
-          department_id?: string | null
           created_at?: string
+        }
+        Relationships: []
+      }
+      member_departments: {
+        Row: {
+          member_id: string
+          department_id: string
+        }
+        Insert: {
+          member_id: string
+          department_id: string
+        }
+        Update: {
+          member_id?: string
+          department_id?: string
         }
         Relationships: [
           {
-            foreignKeyName: "members_department_id_fkey"
+            foreignKeyName: "member_departments_department_id_fkey"
             columns: ["department_id"]
             isOneToOne: false
             referencedRelation: "departments"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "member_departments_member_id_fkey"
+            columns: ["member_id"]
+            isOneToOne: false
+            referencedRelation: "members"
             referencedColumns: ["id"]
           },
         ]
       }
     }
     Views: Record<string, never>
-    Functions: Record<string, never>
+    Functions: {
+      save_member_with_departments: {
+        Args: {
+          p_department_ids: string[]
+          p_member_id: string | null
+          p_name: string
+          p_telegram_id: string | null
+          p_telegram_username: string | null
+        }
+        Returns: string
+      }
+    }
     Enums: Record<string, never>
     CompositeTypes: Record<string, never>
   }

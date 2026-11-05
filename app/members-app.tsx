@@ -5,6 +5,8 @@ import { useRouter } from 'next/navigation'
 import {
   AtSign,
   Building2,
+  ChevronDown,
+  Filter,
   LogOut,
   Plus,
   Search,
@@ -19,9 +21,9 @@ import type { Database } from '@/lib/database.types'
 
 type Member = Pick<
   Database['public']['Tables']['members']['Row'],
-  'id' | 'name' | 'telegram_id' | 'telegram_username' | 'department_id'
+  'id' | 'name' | 'telegram_id' | 'telegram_username'
 > & {
-  department: { name: string } | null
+  departments: Array<Pick<Department, 'id' | 'name'>>
 }
 type Department = Pick<
   Database['public']['Tables']['departments']['Row'],
@@ -31,7 +33,7 @@ type MemberInput = {
   name: string
   telegram_id: string | null
   telegram_username: string | null
-  department_id: string | null
+  department_ids: string[]
 }
 
 type MembersAppProps = {
@@ -65,6 +67,7 @@ export function MembersApp({
   const departments = initialDepartments
   const [activeView, setActiveView] = useState<'members' | 'departments'>('members')
   const [search, setSearch] = useState('')
+  const [departmentFilter, setDepartmentFilter] = useState('all')
   const [memberDialogOpen, setMemberDialogOpen] = useState(false)
   const [departmentDialogOpen, setDepartmentDialogOpen] = useState(false)
   const [editingMember, setEditingMember] = useState<Member | null>(null)
@@ -74,26 +77,31 @@ export function MembersApp({
 
   const filteredMembers = useMemo(() => {
     const query = search.trim().toLowerCase()
-    if (!query) return members
-
-    return members.filter((member) =>
-      [
+    return members.filter((member) => {
+      const matchesDepartment = departmentFilter === 'all'
+        || (departmentFilter === 'unassigned'
+          ? member.departments.length === 0
+          : member.departments.some((department) => department.id === departmentFilter))
+      const matchesSearch = !query || [
         member.name,
         member.telegram_id ?? '',
         member.telegram_username ?? '',
-        member.department?.name ?? '',
-      ].some((value) => value.toLowerCase().includes(query)),
-    )
-  }, [members, search])
+        ...member.departments.map((department) => department.name),
+      ].some((value) => value.toLowerCase().includes(query))
+
+      return matchesDepartment && matchesSearch
+    })
+  }, [departmentFilter, members, search])
+  const hasMemberFilters = Boolean(search.trim()) || departmentFilter !== 'all'
 
   const departmentMemberCounts = useMemo(() => {
     const counts = new Map<string, number>()
 
     for (const member of members) {
-      if (member.department_id) {
+      for (const department of member.departments) {
         counts.set(
-          member.department_id,
-          (counts.get(member.department_id) ?? 0) + 1,
+          department.id,
+          (counts.get(department.id) ?? 0) + 1,
         )
       }
     }
@@ -102,12 +110,15 @@ export function MembersApp({
   }, [members])
 
   async function saveMember(input: MemberInput) {
-    const supabase = createClient()
-    const result = editingMember
-      ? await supabase.from('members').update(input).eq('id', editingMember.id)
-      : await supabase.from('members').insert(input)
+    const { error } = await createClient().rpc('save_member_with_departments', {
+      p_member_id: editingMember?.id ?? null,
+      p_name: input.name,
+      p_telegram_id: input.telegram_id,
+      p_telegram_username: input.telegram_username,
+      p_department_ids: input.department_ids,
+    })
 
-    if (result.error) throw new Error(result.error.message)
+    if (error) throw new Error(error.message)
 
     setMemberDialogOpen(false)
     setEditingMember(null)
@@ -145,7 +156,7 @@ export function MembersApp({
   async function deleteDepartment(department: Department) {
     const assignedCount = departmentMemberCounts.get(department.id) ?? 0
     const message = assignedCount
-      ? `Remove ${department.name}? ${assignedCount} member${assignedCount === 1 ? '' : 's'} will become unassigned.`
+      ? `Remove ${department.name}? ${assignedCount} member${assignedCount === 1 ? '' : 's'} will be removed from this department.`
       : `Remove ${department.name}?`
     if (!window.confirm(message)) return
 
@@ -275,7 +286,7 @@ export function MembersApp({
             <div className="notice notice-error" role="alert">
               <strong>Could not load your directory.</strong>
               <span>{loadError}</span>
-              <span>Apply your database migrations with <code>supabase db push</code>, then refresh.</span>
+              <span>Apply your hosted database migrations with <code>supabase db push --remote</code>, then refresh.</span>
             </div>
           )}
           {actionError && <div className="notice notice-error" role="alert">{actionError}</div>}
@@ -296,36 +307,54 @@ export function MembersApp({
             <article className="stat-card">
               <div className="stat-icon stat-icon-amber"><Users size={18} /></div>
               <span>Unassigned</span>
-              <strong>{members.filter((member) => !member.department_id).length}</strong>
+              <strong>{members.filter((member) => member.departments.length === 0).length}</strong>
               <small>without a department</small>
             </article>
           </section>
 
           {activeView === 'members' ? (
             <section className="directory-card">
-              <div className="card-toolbar">
+              <div className="card-toolbar member-card-toolbar">
                 <div>
                   <h2>All members <span className="result-count">{members.length}</span></h2>
                   <p>Your people, ready to organize.</p>
                 </div>
-                <label className="search-field">
-                  <Search size={17} />
-                  <input
-                    type="search"
-                    placeholder="Search members"
-                    aria-label="Search members"
-                    value={search}
-                    onChange={(event) => setSearch(event.target.value)}
-                  />
-                  {search && <button type="button" className="search-clear" onClick={() => setSearch('')} aria-label="Clear search"><X size={15} /></button>}
-                </label>
+                <div className="member-list-controls">
+                  <label className="department-filter">
+                    <Filter size={16} aria-hidden="true" />
+                    <span className="sr-only">Filter by department</span>
+                    <select
+                      aria-label="Filter by department"
+                      value={departmentFilter}
+                      onChange={(event) => setDepartmentFilter(event.target.value)}
+                    >
+                      <option value="all">All departments</option>
+                      <option value="unassigned">Unassigned</option>
+                      {departments.map((department) => (
+                        <option value={department.id} key={department.id}>{department.name}</option>
+                      ))}
+                    </select>
+                    <ChevronDown className="department-filter-chevron" size={15} aria-hidden="true" />
+                  </label>
+                  <label className="search-field">
+                    <Search size={17} />
+                    <input
+                      type="search"
+                      placeholder="Search members"
+                      aria-label="Search members"
+                      value={search}
+                      onChange={(event) => setSearch(event.target.value)}
+                    />
+                    {search && <button type="button" className="search-clear" onClick={() => setSearch('')} aria-label="Clear search"><X size={15} /></button>}
+                  </label>
+                </div>
               </div>
 
               {filteredMembers.length ? (
                 <div className="table-scroll">
                   <table className="directory-table">
                     <thead>
-                      <tr><th>MEMBER</th><th>TELEGRAM</th><th>DEPARTMENT</th><th><span className="sr-only">Actions</span></th></tr>
+                      <tr><th>MEMBER</th><th>TELEGRAM</th><th>DEPARTMENTS</th><th><span className="sr-only">Actions</span></th></tr>
                     </thead>
                     <tbody>
                       {filteredMembers.map((member) => (
@@ -343,7 +372,13 @@ export function MembersApp({
                             </div>
                           </td>
                           <td>
-                            {member.department ? <span className="department-badge">{member.department.name}</span> : <span className="unassigned">Unassigned</span>}
+                            {member.departments.length ? (
+                              <div className="member-departments">
+                                {member.departments.map((department) => (
+                                  <span className="department-badge" key={department.id}>{department.name}</span>
+                                ))}
+                              </div>
+                            ) : <span className="unassigned">Unassigned</span>}
                           </td>
                           <td>
                             <div className="row-actions">
@@ -359,9 +394,11 @@ export function MembersApp({
               ) : (
                 <div className="empty-state">
                   <div className="empty-icon"><Users size={23} /></div>
-                  <h3>{search ? 'No matching members' : 'Your directory starts here'}</h3>
-                  <p>{search ? 'Try another name, Telegram detail, or department.' : 'Add a member to keep their name and Telegram details handy.'}</p>
-                  {!search && <button className="secondary-button" onClick={() => openMemberForm()}><Plus size={16} /> Add your first member</button>}
+                  <h3>{hasMemberFilters ? 'No matching members' : 'Your directory starts here'}</h3>
+                  <p>{hasMemberFilters ? 'Try a different search or department filter.' : 'Add a member to keep their name and Telegram details handy.'}</p>
+                  {hasMemberFilters
+                    ? <button className="secondary-button" onClick={() => { setSearch(''); setDepartmentFilter('all') }}><X size={16} /> Clear filters</button>
+                    : <button className="secondary-button" onClick={() => openMemberForm()}><Plus size={16} /> Add your first member</button>}
                 </div>
               )}
               <div className="card-footer">
@@ -433,7 +470,7 @@ function MemberForm({ member, departments, onSave, onClose }: MemberFormProps) {
   const [name, setName] = useState(member?.name ?? '')
   const [telegramId, setTelegramId] = useState(member?.telegram_id ?? '')
   const [telegramUsername, setTelegramUsername] = useState(member?.telegram_username ?? '')
-  const [departmentId, setDepartmentId] = useState(member?.department_id ?? '')
+  const [departmentIds, setDepartmentIds] = useState(member?.departments.map(({ id }) => id) ?? [])
   const [error, setError] = useState('')
   const [saving, setSaving] = useState(false)
 
@@ -453,7 +490,7 @@ function MemberForm({ member, departments, onSave, onClose }: MemberFormProps) {
         name: name.trim(),
         telegram_id: cleanId || null,
         telegram_username: cleanUsername || null,
-        department_id: departmentId || null,
+        department_ids: departmentIds,
       })
     } catch (caughtError) {
       setError(caughtError instanceof Error ? caughtError.message : 'Unable to save member.')
@@ -480,11 +517,27 @@ function MemberForm({ member, departments, onSave, onClose }: MemberFormProps) {
           </div>
         </div>
 
-        <label htmlFor="member-department">Department <span className="optional-label">Optional</span></label>
-        <select id="member-department" value={departmentId} onChange={(event) => setDepartmentId(event.target.value)}>
-          <option value="">No department</option>
-          {departments.map((department) => <option value={department.id} key={department.id}>{department.name}</option>)}
-        </select>
+        <fieldset className="department-checkboxes">
+          <legend>Departments <span className="optional-label">Optional</span></legend>
+          {departments.length ? (
+            <div className="department-checkbox-list">
+              {departments.map((department) => (
+                <label className="department-option" key={department.id}>
+                  <input
+                    type="checkbox"
+                    checked={departmentIds.includes(department.id)}
+                    onChange={(event) => {
+                      setDepartmentIds((current) => event.target.checked
+                        ? [...current, department.id]
+                        : current.filter((id) => id !== department.id))
+                    }}
+                  />
+                  <span>{department.name}</span>
+                </label>
+              ))}
+            </div>
+          ) : <p className="department-options-empty">Create a department to assign members.</p>}
+        </fieldset>
 
         {error && <p className="form-error" role="alert">{error}</p>}
         <div className="modal-actions">
