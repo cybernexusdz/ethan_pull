@@ -7,6 +7,7 @@ import {
   Building2,
   ChevronDown,
   Filter,
+  KeyRound,
   LogOut,
   Plus,
   Search,
@@ -14,6 +15,7 @@ import {
   ShieldCheck,
   Trash2,
   Users,
+  UserRound,
   X,
 } from 'lucide-react'
 import { createClient } from '@/lib/client'
@@ -29,6 +31,14 @@ type Department = Pick<
   Database['public']['Tables']['departments']['Row'],
   'id' | 'name' | 'telegram_title_ar'
 >
+type TelegramCommandUser = Pick<
+  Database['public']['Tables']['telegram_command_users']['Row'],
+  'id' | 'telegram_id' | 'telegram_username'
+>
+type TelegramAllowedChat = Pick<
+  Database['public']['Tables']['telegram_allowed_chats']['Row'],
+  'chat_id' | 'name'
+>
 type MemberInput = {
   name: string
   telegram_id: string | null
@@ -40,6 +50,9 @@ type MembersAppProps = {
   email: string
   initialMembers: Member[]
   initialDepartments: Department[]
+  initialCommandUsers: TelegramCommandUser[]
+  initialAllowedChats: TelegramAllowedChat[]
+  initialTargetGroupId: string | null
   loadError: string | null
 }
 
@@ -56,20 +69,44 @@ type DepartmentFormProps = {
   onClose: () => void
 }
 
+type TelegramCommandUserFormProps = {
+  onSave: (identifier: { telegram_id: string | null; telegram_username: string | null }) => Promise<void>
+  onClose: () => void
+}
+
+type TelegramAllowedChatFormProps = {
+  chat: TelegramAllowedChat | null
+  onSave: (chatId: string, name: string) => Promise<void>
+  onClose: () => void
+}
+
+type TelegramTargetGroupFormProps = {
+  initialChatId: string | null
+  onSave: (chatId: string) => Promise<void>
+  onClose: () => void
+}
+
 export function MembersApp({
   email,
   initialMembers,
   initialDepartments,
+  initialCommandUsers,
+  initialAllowedChats,
+  initialTargetGroupId,
   loadError,
 }: MembersAppProps) {
   const router = useRouter()
   const members = initialMembers
   const departments = initialDepartments
-  const [activeView, setActiveView] = useState<'members' | 'departments'>('members')
+  const [activeView, setActiveView] = useState<'members' | 'departments' | 'command-access'>('members')
   const [search, setSearch] = useState('')
   const [departmentFilter, setDepartmentFilter] = useState('all')
   const [memberDialogOpen, setMemberDialogOpen] = useState(false)
   const [departmentDialogOpen, setDepartmentDialogOpen] = useState(false)
+  const [commandUserDialogOpen, setCommandUserDialogOpen] = useState(false)
+  const [allowedChatDialogOpen, setAllowedChatDialogOpen] = useState(false)
+  const [targetGroupDialogOpen, setTargetGroupDialogOpen] = useState(false)
+  const [editingAllowedChat, setEditingAllowedChat] = useState<TelegramAllowedChat | null>(null)
   const [editingMember, setEditingMember] = useState<Member | null>(null)
   const [editingDepartment, setEditingDepartment] = useState<Department | null>(null)
   const [actionError, setActionError] = useState('')
@@ -140,6 +177,87 @@ export function MembersApp({
     router.refresh()
   }
 
+  async function saveCommandUser(input: { telegram_id: string | null; telegram_username: string | null }) {
+    const { error } = await createClient()
+      .from('telegram_command_users')
+      .insert(input)
+
+    if (error) throw new Error(error.message)
+
+    setCommandUserDialogOpen(false)
+    setActionError('')
+    router.refresh()
+  }
+
+  async function deleteCommandUser(commandUser: TelegramCommandUser) {
+    const identifier = commandUser.telegram_id
+      ? `Telegram ID ${commandUser.telegram_id}`
+      : `@${commandUser.telegram_username}`
+    if (!window.confirm(`Remove ${identifier} from the bot command allowlist?`)) return
+
+    setActionError('')
+    try {
+      const { error } = await createClient()
+        .from('telegram_command_users')
+        .delete()
+        .eq('id', commandUser.id)
+      if (error) throw new Error(error.message)
+      router.refresh()
+    } catch (caughtError) {
+      setActionError(caughtError instanceof Error ? caughtError.message : 'Unable to remove the allowed user.')
+    }
+  }
+
+  async function saveAllowedChat(chatId: string, name: string) {
+    const supabase = createClient()
+    const result = editingAllowedChat
+      ? await supabase
+        .from('telegram_allowed_chats')
+        .update({ name })
+        .eq('chat_id', editingAllowedChat.chat_id)
+      : await supabase
+        .from('telegram_allowed_chats')
+        .insert({ chat_id: chatId, name })
+
+    if (result.error) throw new Error(result.error.message)
+
+    setAllowedChatDialogOpen(false)
+    setEditingAllowedChat(null)
+    setActionError('')
+    router.refresh()
+  }
+
+  async function saveTargetGroup(chatId: string) {
+    const { error } = await createClient()
+      .from('telegram_bot_settings')
+      .upsert(
+        { id: true, target_group_id: chatId, updated_at: new Date().toISOString() },
+        { onConflict: 'id' },
+      )
+
+    if (error) throw new Error(error.message)
+
+    setTargetGroupDialogOpen(false)
+    setActionError('')
+    router.refresh()
+  }
+
+  async function deleteAllowedChat(chat: TelegramAllowedChat) {
+    if (!window.confirm(`Remove chat ${chat.chat_id} from the bot command allowlist?`)) return
+
+    setActionError('')
+    try {
+      const { error } = await createClient()
+        .from('telegram_allowed_chats')
+        .delete()
+        .eq('chat_id', chat.chat_id)
+      if (error) throw new Error(error.message)
+      router.refresh()
+    } catch (caughtError) {
+      setActionError(caughtError instanceof Error ? caughtError.message : 'Unable to remove the allowed chat.')
+    }
+  }
+
   async function deleteMember(member: Member) {
     if (!window.confirm(`Remove ${member.name} from the directory?`)) return
 
@@ -193,6 +311,27 @@ export function MembersApp({
     setDepartmentDialogOpen(true)
   }
 
+  const viewDetails = {
+    members: {
+      title: 'Members',
+      eyebrow: 'YOUR PEOPLE',
+      description: 'Keep your people and their Telegram details in one place.',
+      action: 'Add member',
+    },
+    departments: {
+      title: 'Departments',
+      eyebrow: 'YOUR ORGANIZATION',
+      description: 'Group members into the teams that make up your organization.',
+      action: 'Add department',
+    },
+    'command-access': {
+      title: 'Command access',
+      eyebrow: 'BOT PERMISSIONS',
+      description: 'Choose where commands are accepted, where mentions go, and who can use the bot.',
+      action: 'Add allowed chat',
+    },
+  }[activeView]
+
   return (
     <div className="workspace">
       <aside className="sidebar">
@@ -218,6 +357,14 @@ export function MembersApp({
             <Building2 size={18} />
             <span>Departments</span>
             <span className="nav-count">{departments.length}</span>
+          </button>
+          <button
+            className={`nav-item ${activeView === 'command-access' ? 'active' : ''}`}
+            onClick={() => { setActiveView('command-access'); setSearch('') }}
+          >
+            <KeyRound size={18} />
+            <span>Command access</span>
+            <span className="nav-count">{initialCommandUsers.length + initialAllowedChats.length}</span>
           </button>
         </nav>
 
@@ -248,7 +395,7 @@ export function MembersApp({
             <span className="brand-mark"><Users size={18} /></span>
             <span>Ethan Pull</span>
           </div>
-          <div className="breadcrumb"><span>Workspace</span><span className="breadcrumb-slash">/</span><strong>{activeView === 'members' ? 'Members' : 'Departments'}</strong></div>
+          <div className="breadcrumb"><span>Workspace</span><span className="breadcrumb-slash">/</span><strong>{viewDetails.title}</strong></div>
           <div className="topbar-right">
             <span className="secure-pill"><span /> Secure workspace</span>
             <button className="mobile-signout icon-button" onClick={signOut} disabled={signingOut} aria-label="Sign out">
@@ -265,20 +412,27 @@ export function MembersApp({
             <button className={activeView === 'departments' ? 'active' : ''} onClick={() => { setActiveView('departments'); setSearch('') }}>
               <Building2 size={16} /> Departments <span>{departments.length}</span>
             </button>
+            <button className={activeView === 'command-access' ? 'active' : ''} onClick={() => { setActiveView('command-access'); setSearch('') }}>
+              <KeyRound size={16} /> Access <span>{initialCommandUsers.length + initialAllowedChats.length}</span>
+            </button>
           </nav>
 
           <section className="page-heading">
             <div>
-              <div className="eyebrow">{activeView === 'members' ? 'YOUR PEOPLE' : 'YOUR ORGANIZATION'}</div>
-              <h1>{activeView === 'members' ? 'Members' : 'Departments'}</h1>
-              <p>{activeView === 'members' ? 'Keep your people and their Telegram details in one place.' : 'Group members into the teams that make up your organization.'}</p>
+              <div className="eyebrow">{viewDetails.eyebrow}</div>
+              <h1>{viewDetails.title}</h1>
+              <p>{viewDetails.description}</p>
             </div>
             <button
               className="primary-button"
-              onClick={() => activeView === 'members' ? openMemberForm() : openDepartmentForm()}
+              onClick={() => {
+                if (activeView === 'members') openMemberForm()
+                else if (activeView === 'departments') openDepartmentForm()
+                else setAllowedChatDialogOpen(true)
+              }}
             >
               <Plus size={18} />
-              {activeView === 'members' ? 'Add member' : 'Add department'}
+              {viewDetails.action}
             </button>
           </section>
 
@@ -291,7 +445,7 @@ export function MembersApp({
           )}
           {actionError && <div className="notice notice-error" role="alert">{actionError}</div>}
 
-          <section className="stats-grid" aria-label="Directory overview">
+          {activeView !== 'command-access' && <section className="stats-grid" aria-label="Directory overview">
             <article className="stat-card">
               <div className="stat-icon stat-icon-blue"><Users size={18} /></div>
               <span>Total members</span>
@@ -310,7 +464,7 @@ export function MembersApp({
               <strong>{members.filter((member) => member.departments.length === 0).length}</strong>
               <small>without a department</small>
             </article>
-          </section>
+          </section>}
 
           {activeView === 'members' ? (
             <section className="directory-card">
@@ -406,7 +560,7 @@ export function MembersApp({
                 <span className="footer-secure"><ShieldCheck size={14} /> Private to your workspace</span>
               </div>
             </section>
-          ) : (
+          ) : activeView === 'departments' ? (
             <section className="directory-card">
               <div className="card-toolbar">
                 <div>
@@ -443,6 +597,141 @@ export function MembersApp({
                 <span className="footer-secure"><ShieldCheck size={14} /> Private to your workspace</span>
               </div>
             </section>
+          ) : (
+            <div className="access-management-grid">
+              <section className="directory-card">
+                <div className="card-toolbar">
+                  <div>
+                    <h2>Destination group</h2>
+                    <p>Where the bot sends /all and department mentions.</p>
+                  </div>
+                  <button className="secondary-button" onClick={() => setTargetGroupDialogOpen(true)}>
+                    <span className="edit-glyph">✎</span>
+                    {initialTargetGroupId ? 'Change group' : 'Set group'}
+                  </button>
+                </div>
+                <div className="department-row">
+                  <div className="department-icon access-icon"><Send size={18} /></div>
+                  <div className="department-details">
+                    <strong>{initialTargetGroupId ? `Chat ID ${initialTargetGroupId}` : 'No destination configured'}</strong>
+                    <span>{initialTargetGroupId
+                      ? 'Mention commands are sent here'
+                      : 'Configure a group before using /all or department commands'}</span>
+                  </div>
+                </div>
+                <div className="access-notice">
+                  <ShieldCheck size={18} />
+                  <p>This is separate from Allowed chats. The destination receives mentions; Allowed chats control where commands may be issued.</p>
+                </div>
+              </section>
+
+              <section className="directory-card">
+                <div className="card-toolbar">
+                  <div>
+                    <h2>Allowed chats <span className="result-count">{initialAllowedChats.length}</span></h2>
+                    <p>Chats where the bot accepts commands. Group chats allow any listed user below.</p>
+                  </div>
+                </div>
+                <div className="access-notice">
+                  <ShieldCheck size={18} />
+                  <p>Both the chat and the sender must be allowed. Remove a chat here to block commands from it.</p>
+                </div>
+                {initialAllowedChats.length ? (
+                  <div className="department-list">
+                    {initialAllowedChats.map((chat) => (
+                      <article className="department-row" key={chat.chat_id}>
+                        <div className="department-icon access-icon"><Building2 size={18} /></div>
+                        <div className="department-details">
+                          <strong>{chat.name}</strong>
+                          <span>Chat ID {chat.chat_id}</span>
+                          <span>{chat.chat_id.startsWith('-') ? 'Group or channel' : 'Private chat'}</span>
+                        </div>
+                        <div className="row-actions">
+                          <button
+                            className="icon-button"
+                            onClick={() => {
+                              setEditingAllowedChat(chat)
+                              setAllowedChatDialogOpen(true)
+                            }}
+                            aria-label={`Edit name for ${chat.name}`}
+                            title="Edit chat name"
+                          >
+                            <span className="edit-glyph">✎</span>
+                          </button>
+                          <button
+                            className="icon-button danger-hover"
+                            onClick={() => deleteAllowedChat(chat)}
+                            aria-label={`Remove chat ${chat.chat_id}`}
+                            title="Remove allowed chat"
+                          >
+                            <Trash2 size={16} />
+                          </button>
+                        </div>
+                      </article>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="empty-state">
+                    <div className="empty-icon"><Building2 size={23} /></div>
+                    <h3>No chats are allowed</h3>
+                    <p>The bot will ignore all commands until you add at least one Telegram chat ID.</p>
+                    <button className="secondary-button" onClick={() => setAllowedChatDialogOpen(true)}><Plus size={16} /> Add the first chat</button>
+                  </div>
+                )}
+                <div className="card-footer">
+                  <span><strong>{initialAllowedChats.length}</strong> allowed {initialAllowedChats.length === 1 ? 'chat' : 'chats'}</span>
+                  <span className="footer-secure"><ShieldCheck size={14} /> Private to your workspace</span>
+                </div>
+              </section>
+
+              <section className="directory-card">
+                <div className="card-toolbar">
+                  <div>
+                    <h2>Allowed users <span className="result-count">{initialCommandUsers.length}</span></h2>
+                    <p>Only these people can run commands in an allowed chat.</p>
+                  </div>
+                  <button className="secondary-button" onClick={() => setCommandUserDialogOpen(true)}>
+                    <Plus size={16} /> Allow a user
+                  </button>
+                </div>
+                {initialCommandUsers.length ? (
+                  <div className="department-list">
+                    {initialCommandUsers.map((commandUser) => (
+                      <article className="department-row" key={commandUser.id}>
+                        <div className="department-icon access-icon"><UserRound size={18} /></div>
+                        <div className="department-details">
+                          <strong>{commandUser.telegram_id
+                            ? `Telegram ID ${commandUser.telegram_id}`
+                            : `@${commandUser.telegram_username}`}</strong>
+                          <span>{commandUser.telegram_id ? 'Matched by stable Telegram user ID' : 'Matched by Telegram username'}</span>
+                        </div>
+                        <div className="row-actions">
+                          <button
+                            className="icon-button danger-hover"
+                            onClick={() => deleteCommandUser(commandUser)}
+                            aria-label={`Remove ${commandUser.telegram_id ? `Telegram ID ${commandUser.telegram_id}` : `@${commandUser.telegram_username}`}`}
+                            title="Remove allowed user"
+                          >
+                            <Trash2 size={16} />
+                          </button>
+                        </div>
+                      </article>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="empty-state">
+                    <div className="empty-icon"><KeyRound size={23} /></div>
+                    <h3>No one is allowed to run commands</h3>
+                    <p>The bot will deny every command until you add at least one Telegram ID or username.</p>
+                    <button className="secondary-button" onClick={() => setCommandUserDialogOpen(true)}><Plus size={16} /> Allow the first user</button>
+                  </div>
+                )}
+                <div className="card-footer">
+                  <span><strong>{initialCommandUsers.length}</strong> allowed {initialCommandUsers.length === 1 ? 'user' : 'users'}</span>
+                  <span className="footer-secure"><ShieldCheck size={14} /> Private to your workspace</span>
+                </div>
+              </section>
+            </div>
           )}
         </div>
       </main>
@@ -460,6 +749,29 @@ export function MembersApp({
           department={editingDepartment}
           onSave={saveDepartment}
           onClose={() => { setDepartmentDialogOpen(false); setEditingDepartment(null) }}
+        />
+      )}
+      {commandUserDialogOpen && (
+        <TelegramCommandUserForm
+          onSave={saveCommandUser}
+          onClose={() => setCommandUserDialogOpen(false)}
+        />
+      )}
+      {allowedChatDialogOpen && (
+        <TelegramAllowedChatForm
+          chat={editingAllowedChat}
+          onSave={saveAllowedChat}
+          onClose={() => {
+            setAllowedChatDialogOpen(false)
+            setEditingAllowedChat(null)
+          }}
+        />
+      )}
+      {targetGroupDialogOpen && (
+        <TelegramTargetGroupForm
+          initialChatId={initialTargetGroupId}
+          onSave={saveTargetGroup}
+          onClose={() => setTargetGroupDialogOpen(false)}
         />
       )}
     </div>
@@ -580,6 +892,180 @@ function DepartmentForm({ department, onSave, onClose }: DepartmentFormProps) {
         <div className="modal-actions">
           <button className="secondary-button" type="button" onClick={onClose} disabled={saving}>Cancel</button>
           <button className="primary-button" type="submit" disabled={saving}>{saving ? 'Saving…' : department ? 'Save changes' : 'Add department'}</button>
+        </div>
+      </form>
+    </Modal>
+  )
+}
+
+function TelegramCommandUserForm({ onSave, onClose }: TelegramCommandUserFormProps) {
+  const [identifier, setIdentifier] = useState('')
+  const [error, setError] = useState('')
+  const [saving, setSaving] = useState(false)
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    const value = identifier.trim()
+    const username = value.replace(/^@/, '')
+    const input = /^[0-9]{1,20}$/.test(value)
+      ? { telegram_id: value, telegram_username: null }
+      : /^[A-Za-z0-9_]{5,32}$/.test(username)
+        ? { telegram_id: null, telegram_username: username.toLowerCase() }
+        : null
+
+    if (!input) {
+      setError('Enter a numeric Telegram user ID or a username with 5–32 letters, numbers, or underscores.')
+      return
+    }
+
+    setSaving(true)
+    setError('')
+    try {
+      await onSave(input)
+    } catch (caughtError) {
+      setError(caughtError instanceof Error ? caughtError.message : 'Unable to allow this Telegram user.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Modal title="Allow a Telegram user" onClose={onClose}>
+      <form className="modal-form" onSubmit={handleSubmit}>
+        <p className="modal-description">Allow one person to run bot commands in chats listed in the bot’s chat allowlist. Telegram user IDs are more reliable than usernames.</p>
+        <label htmlFor="telegram-command-user">Telegram user ID or username <span className="required-mark">*</span></label>
+        <input
+          id="telegram-command-user"
+          value={identifier}
+          onChange={(event) => setIdentifier(event.target.value)}
+          placeholder="e.g. 123456789 or @alexmorgan"
+          autoFocus
+          required
+          maxLength={33}
+        />
+        {error && <p className="form-error" role="alert">{error}</p>}
+        <div className="modal-actions">
+          <button className="secondary-button" type="button" onClick={onClose} disabled={saving}>Cancel</button>
+          <button className="primary-button" type="submit" disabled={saving}>{saving ? 'Saving…' : 'Allow user'}</button>
+        </div>
+      </form>
+    </Modal>
+  )
+}
+
+function TelegramAllowedChatForm({ chat, onSave, onClose }: TelegramAllowedChatFormProps) {
+  const [chatId, setChatId] = useState(chat?.chat_id ?? '')
+  const [name, setName] = useState(chat?.name ?? '')
+  const [error, setError] = useState('')
+  const [saving, setSaving] = useState(false)
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    const value = chatId.trim()
+    const cleanName = name.trim()
+    if (!chat && !/^-?[1-9][0-9]{0,19}$/.test(value)) {
+      setError('Enter a non-zero numeric Telegram chat ID. Group IDs are usually negative.')
+      return
+    }
+    if (!cleanName || cleanName.length > 80) {
+      setError('Enter a chat name up to 80 characters long.')
+      return
+    }
+
+    setSaving(true)
+    setError('')
+    try {
+      await onSave(value, cleanName)
+    } catch (caughtError) {
+      setError(caughtError instanceof Error ? caughtError.message : 'Unable to save this Telegram chat.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Modal title={chat ? 'Edit allowed chat' : 'Add an allowed chat'} onClose={onClose}>
+      <form className="modal-form" onSubmit={handleSubmit}>
+        <p className="modal-description">{chat
+          ? 'Change the label shown for this chat. The Telegram ID stays the same.'
+          : 'Name this chat so it is easy to recognize, then allow commands in it. In groups, only people on the Allowed users list can run commands.'}</p>
+        <label htmlFor="telegram-allowed-chat-name">Chat name <span className="required-mark">*</span></label>
+        <input
+          id="telegram-allowed-chat-name"
+          value={name}
+          onChange={(event) => setName(event.target.value)}
+          placeholder="e.g. HR Group"
+          autoFocus
+          required
+          maxLength={80}
+        />
+        {!chat && (
+          <>
+            <label htmlFor="telegram-allowed-chat-id">Telegram chat ID <span className="required-mark">*</span></label>
+            <input
+              id="telegram-allowed-chat-id"
+              inputMode="numeric"
+              value={chatId}
+              onChange={(event) => setChatId(event.target.value)}
+              placeholder="e.g. -1001234567890"
+              required
+              maxLength={21}
+            />
+          </>
+        )}
+        {error && <p className="form-error" role="alert">{error}</p>}
+        <div className="modal-actions">
+          <button className="secondary-button" type="button" onClick={onClose} disabled={saving}>Cancel</button>
+          <button className="primary-button" type="submit" disabled={saving}>{saving ? 'Saving…' : chat ? 'Save name' : 'Allow chat'}</button>
+        </div>
+      </form>
+    </Modal>
+  )
+}
+
+function TelegramTargetGroupForm({ initialChatId, onSave, onClose }: TelegramTargetGroupFormProps) {
+  const [chatId, setChatId] = useState(initialChatId ?? '')
+  const [error, setError] = useState('')
+  const [saving, setSaving] = useState(false)
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    const value = chatId.trim()
+    if (!/^-[1-9][0-9]{0,19}$/.test(value)) {
+      setError('Enter a negative numeric Telegram group ID, usually starting with -100.')
+      return
+    }
+
+    setSaving(true)
+    setError('')
+    try {
+      await onSave(value)
+    } catch (caughtError) {
+      setError(caughtError instanceof Error ? caughtError.message : 'Unable to save the destination group.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Modal title="Set the destination group" onClose={onClose}>
+      <form className="modal-form" onSubmit={handleSubmit}>
+        <p className="modal-description">The bot sends /all and department mentions to this Telegram group. To keep topic replies, issue commands in this same group.</p>
+        <label htmlFor="telegram-target-group">Telegram group ID <span className="required-mark">*</span></label>
+        <input
+          id="telegram-target-group"
+          inputMode="numeric"
+          value={chatId}
+          onChange={(event) => setChatId(event.target.value)}
+          placeholder="e.g. -1001234567890"
+          autoFocus
+          required
+          maxLength={21}
+        />
+        {error && <p className="form-error" role="alert">{error}</p>}
+        <div className="modal-actions">
+          <button className="secondary-button" type="button" onClick={onClose} disabled={saving}>Cancel</button>
+          <button className="primary-button" type="submit" disabled={saving}>{saving ? 'Saving…' : 'Save group'}</button>
         </div>
       </form>
     </Modal>

@@ -76,6 +76,63 @@ export type Database = {
           },
         ]
       }
+      telegram_command_users: {
+        Row: {
+          id: string
+          telegram_id: string | null
+          telegram_username: string | null
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          telegram_id?: string | null
+          telegram_username?: string | null
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          telegram_id?: string | null
+          telegram_username?: string | null
+          created_at?: string
+        }
+        Relationships: []
+      }
+      telegram_allowed_chats: {
+        Row: {
+          chat_id: string
+          name: string
+          created_at: string
+        }
+        Insert: {
+          chat_id: string
+          name: string
+          created_at?: string
+        }
+        Update: {
+          chat_id?: string
+          name?: string
+          created_at?: string
+        }
+        Relationships: []
+      }
+      telegram_bot_settings: {
+        Row: {
+          id: boolean
+          target_group_id: string | null
+          updated_at: string
+        }
+        Insert: {
+          id?: boolean
+          target_group_id?: string | null
+          updated_at?: string
+        }
+        Update: {
+          id?: boolean
+          target_group_id?: string | null
+          updated_at?: string
+        }
+        Relationships: []
+      }
     }
     Views: Record<string, never>
     Functions: {

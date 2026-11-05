@@ -998,6 +998,46 @@
   margin-left: auto;
 }
 
+.access-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 16px 19px 4px;
+  padding: 12px 14px;
+  border: 1px solid #e6e9fb;
+  border-radius: 8px;
+  background: #f7f8ff;
+  color: #67718f;
+}
+
+.access-notice svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+  color: #6873df;
+}
+
+.access-notice p {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+.access-icon {
+  background: #eaf8f1;
+  color: #43a77b;
+}
+
+.access-management-grid {
+  display: grid;
+  gap: 18px;
+}
+
+.access-management-grid .card-toolbar .secondary-button {
+  min-height: 34px;
+  padding: 0 11px;
+  font-size: 10px;
+}
+
 .notice {
   display: grid;
   gap: 5px;
@@ -1239,7 +1279,7 @@
 
   .mobile-tabs {
     display: flex;
-    gap: 6px;
+    gap: 3px;
     margin-bottom: 23px;
     padding: 4px;
     border: 1px solid #e8eaf1;
@@ -1253,13 +1293,19 @@
     flex: 1;
     align-items: center;
     justify-content: center;
-    gap: 6px;
+    gap: 4px;
+    padding: 0 3px;
     border: 0;
     border-radius: 6px;
     background: transparent;
     color: #7d859a;
-    font-size: 10px;
+    font-size: 9px;
     cursor: pointer;
+  }
+
+  .mobile-tabs button svg {
+    width: 14px;
+    flex: 0 0 auto;
   }
 
   .mobile-tabs button.active {
