@@ -64,19 +64,6 @@ def required_setting(name: str) -> str:
     return value
 
 
-def parse_allowed_chat_ids() -> set[int]:
-    raw_ids = required_setting("TELEGRAM_ALLOWED_CHAT_IDS")
-    try:
-        chat_ids = {int(value.strip()) for value in raw_ids.split(",") if value.strip()}
-    except ValueError as error:
-        raise ApiError(
-            "TELEGRAM_ALLOWED_CHAT_IDS must be comma-separated Telegram chat IDs."
-        ) from error
-    if not chat_ids:
-        raise ApiError("TELEGRAM_ALLOWED_CHAT_IDS must contain at least one chat ID.")
-    return chat_ids
-
-
 def api_json(url: str, *, payload: dict[str, Any] | None = None,
              headers: dict[str, str] | None = None, timeout: int = API_TIMEOUT) -> Any:
     body = None if payload is None else json.dumps(payload).encode("utf-8")
@@ -116,23 +103,14 @@ class Settings:
     telegram_token: str
     supabase_url: str
     supabase_key: str
-    target_group_id: int
-    allowed_chat_ids: set[int]
 
 
 def read_settings() -> Settings:
     load_local_env()
-    try:
-        target_group_id = int(required_setting("TELEGRAM_TARGET_GROUP_ID"))
-    except ValueError as error:
-        raise ApiError("TELEGRAM_TARGET_GROUP_ID must be a Telegram group chat ID.") from error
-
     return Settings(
         telegram_token=required_setting("TELEGRAM_BOT_TOKEN"),
         supabase_url=required_setting("NEXT_PUBLIC_SUPABASE_URL").rstrip("/"),
         supabase_key=required_setting("SUPABASE_SERVICE_ROLE_KEY"),
-        target_group_id=target_group_id,
-        allowed_chat_ids=parse_allowed_chat_ids(),
     )
 
 
@@ -318,6 +296,74 @@ class DirectoryBot:
             return None
         return command_name.lower()
 
+    def command_user_is_allowed(self, sender: Any) -> bool:
+        if not isinstance(sender, dict):
+            return False
+
+        telegram_id = sender.get("id")
+        user_id = (
+            str(telegram_id)
+            if isinstance(telegram_id, int) and not isinstance(telegram_id, bool)
+            else None
+        )
+        username = str(sender.get("username") or "").strip().lstrip("@").casefold()
+        allowed_users = self.supabase_rows(
+            "telegram_command_users",
+            "telegram_id,telegram_username",
+        )
+        return any(
+            (user_id is not None and row.get("telegram_id") == user_id)
+            or (
+                bool(username)
+                and str(row.get("telegram_username") or "").casefold() == username
+            )
+            for row in allowed_users
+        )
+
+    def command_chat_is_allowed(self, chat_id: int) -> bool:
+        allowed_chats = self.supabase_rows(
+            "telegram_allowed_chats",
+            "chat_id",
+            order_by="chat_id",
+        )
+        return any(row.get("chat_id") == str(chat_id) for row in allowed_chats)
+
+    def get_target_group_id(self) -> int:
+        settings = self.supabase_rows(
+            "telegram_bot_settings",
+            "target_group_id",
+            {"id": "eq.true"},
+        )
+        if len(settings) != 1:
+            raise ApiError("The destination group is not configured in the web app.")
+
+        value = settings[0].get("target_group_id")
+        if not isinstance(value, str) or not re.fullmatch(r"-[1-9][0-9]{0,19}", value):
+            raise ApiError("The destination group ID is missing or invalid in the web app.")
+        return int(value)
+
+    def send_command_mentions(
+        self, chat_id: int, command: str, message_thread_id: int | None
+    ) -> None:
+        try:
+            target_group_id = self.get_target_group_id()
+        except ApiError as error:
+            logger.error("Could not load the Telegram destination group; mention command denied: %s", error)
+            self.send_text(
+                chat_id,
+                "The bot destination group isn't configured or cannot be loaded. Set it in the web app under Command access.",
+                message_thread_id=message_thread_id,
+            )
+            return
+
+        target_thread_id = (
+            message_thread_id if chat_id == target_group_id else None
+        )
+        if command == "all":
+            self.send_all_mentions(target_group_id, target_thread_id)
+        else:
+            self.send_member_mentions(target_group_id, command, target_thread_id)
+
     @staticmethod
     def text_units(text: str) -> int:
         return len(text.encode("utf-16-le")) // 2
@@ -487,14 +533,30 @@ class DirectoryBot:
     def handle_message(self, message: dict[str, Any]) -> None:
         chat = message.get("chat", {})
         chat_id = chat.get("id")
-        if not isinstance(chat_id, int) or chat_id not in self.settings.allowed_chat_ids:
-            if isinstance(chat_id, int):
-                logger.warning("Ignored a command from a non-allowlisted chat.")
+        if not isinstance(chat_id, int) or isinstance(chat_id, bool):
             return
 
         command = self.command_from_message(message, self.bot_username)
         if command is None:
             return
+        try:
+            is_allowed_chat = self.command_chat_is_allowed(chat_id)
+        except ApiError as error:
+            logger.error("Could not load the Telegram chat allowlist; command denied: %s", error)
+            return
+        if not is_allowed_chat:
+            logger.warning("Ignored a command from a chat not in the chat allowlist.")
+            return
+
+        try:
+            is_allowed = self.command_user_is_allowed(message.get("from"))
+        except ApiError as error:
+            logger.error("Could not load the Telegram command allowlist; command denied: %s", error)
+            return
+        if not is_allowed:
+            logger.warning("Ignored a command from a Telegram user not in the command allowlist.")
+            return
+
         thread_id = message.get("message_thread_id")
         if not isinstance(thread_id, int) or isinstance(thread_id, bool):
             thread_id = None
@@ -513,17 +575,8 @@ class DirectoryBot:
         else:
             if not self.refresh_for_command(chat_id, command, thread_id):
                 return
-            target_thread_id = (
-                thread_id if chat_id == self.settings.target_group_id else None
-            )
-            if command == "all":
-                self.send_all_mentions(
-                    self.settings.target_group_id, target_thread_id
-                )
-            elif command in self.departments:
-                self.send_member_mentions(
-                    self.settings.target_group_id, command, target_thread_id
-                )
+            if command == "all" or command in self.departments:
+                self.send_command_mentions(chat_id, command, thread_id)
             else:
                 self.send_text(
                     chat_id,
@@ -583,7 +636,10 @@ class DirectoryBot:
             raise ApiError("Telegram did not return this bot's username.")
 
         self.refresh_directory()
-        logger.info("Bot @%s is running. Allowed chat IDs are configured.", self.bot_username)
+        logger.info(
+            "Bot @%s is running. Chat and Telegram-user allowlists are managed in the web app.",
+            self.bot_username,
+        )
 
         while True:
             self.refresh_if_due()
