@@ -21,7 +21,13 @@ POLL_TIMEOUT = 30
 REFRESH_INTERVAL = 300
 PAGE_SIZE = 1000
 MAX_MESSAGE_UNITS = 3900
-RESERVED_COMMANDS = {"start", "help", "all"}
+BUILTIN_COMMANDS = (
+    ("help", "List available commands"),
+    ("all", "Ping all directory members"),
+)
+RESERVED_COMMANDS = {"start"} | {
+    command for command, _ in BUILTIN_COMMANDS
+}
 ALL_MEMBERS_TITLE = "📢 نــداء الى عمــوم الوحــدات"
 
 logging.basicConfig(
@@ -203,7 +209,7 @@ class DirectoryBot:
                 continue
             commands[slug] = name
 
-        available = 100 - len(RESERVED_COMMANDS)
+        available = 100 - len(BUILTIN_COMMANDS)
         if len(commands) > available:
             skipped = list(commands)[available:]
             commands = dict(list(commands.items())[:available])
@@ -215,17 +221,25 @@ class DirectoryBot:
         return commands
 
     def refresh_departments(self) -> None:
-        departments = self.supabase_rows("departments", "id,name,telegram_title_ar")
+        departments = self.supabase_rows(
+            "departments",
+            "id,name,telegram_title_ar,telegram_help_message",
+        )
         commands = self.build_commands(departments)
+        departments_by_name = {
+            str(department.get("name", "")).strip(): department
+            for department in departments
+        }
         menu = [
-            {"command": "start", "description": "Show bot instructions"},
-            {"command": "help", "description": "List available commands"},
-            {"command": "all", "description": "Ping all directory members"},
+            {"command": command, "description": description}
+            for command, description in BUILTIN_COMMANDS
         ]
         menu.extend(
             {
                 "command": slug,
-                "description": f"Tag members in {name}"[:256],
+                "description": self.department_help_message(
+                    departments_by_name.get(name), name
+                )[:256],
             }
             for slug, name in commands.items()
         )
@@ -235,6 +249,13 @@ class DirectoryBot:
             self.registered_menu = menu
         self.department_rows = departments
         self.departments = commands
+
+    @staticmethod
+    def department_help_message(
+        department: dict[str, Any] | None, name: str
+    ) -> str:
+        message = str((department or {}).get("telegram_help_message") or "").strip()
+        return " ".join(message.split()) if message else f"Tag members in {name}"
 
     def refresh_members(self, department_id: str | None = None) -> None:
         if department_id is None:
@@ -560,18 +581,13 @@ class DirectoryBot:
         thread_id = message.get("message_thread_id")
         if not isinstance(thread_id, int) or isinstance(thread_id, bool):
             thread_id = None
-        if command == "start":
-            self.send_text(
-                chat_id,
-                "Welcome to the member directory bot. Use /help to see commands for your departments.",
-                message_thread_id=thread_id,
-            )
-        elif command == "help":
+        if command == "help":
             if not self.refresh_for_command(chat_id, command, thread_id):
                 return
-            self.send_text(
-                chat_id, self.help_text(), message_thread_id=thread_id
-            )
+            for help_chunk in self.help_text_chunks():
+                self.send_text(
+                    chat_id, help_chunk, message_thread_id=thread_id
+                )
         else:
             if not self.refresh_for_command(chat_id, command, thread_id):
                 return
@@ -621,12 +637,40 @@ class DirectoryBot:
             return False
 
     def help_text(self) -> str:
-        command_list = "\n".join(
-            f"/{slug} — {name}" for slug, name in self.departments.items()
-        )
-        if command_list:
-            return f"/all — Ping all directory members\n{command_list}"
-        return "/all — Ping all directory members\n\nThere are no departments yet."
+        lines = ["/all — Ping all directory members"]
+        for slug, name in self.departments.items():
+            department = next(
+                (
+                    row
+                    for row in self.department_rows
+                    if str(row.get("name", "")).strip() == name
+                ),
+                None,
+            )
+            description = self.department_help_message(department, name)
+            lines.append(f"/{slug} — {description}")
+        if not self.departments:
+            lines.append("")
+            lines.append("There are no departments yet.")
+        return "\n".join(lines)
+
+    def help_text_chunks(self) -> list[str]:
+        chunks: list[str] = []
+        current_lines: list[str] = []
+        current_units = 0
+        for line in self.help_text().splitlines():
+            line_units = self.text_units(line)
+            separator_units = 1 if current_lines else 0
+            if current_lines and current_units + separator_units + line_units > MAX_MESSAGE_UNITS:
+                chunks.append("\n".join(current_lines))
+                current_lines = []
+                current_units = 0
+                separator_units = 0
+            current_lines.append(line)
+            current_units += separator_units + line_units
+        if current_lines:
+            chunks.append("\n".join(current_lines))
+        return chunks
 
     def run(self) -> None:
         self.check_webhook()

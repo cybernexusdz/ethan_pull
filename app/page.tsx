@@ -29,7 +29,10 @@ export default async function Home() {
       .select('id, name, telegram_id, telegram_username')
       .order('name'),
     supabase.from('member_departments').select('member_id, department_id'),
-    supabase.from('departments').select('id, name, telegram_title_ar').order('name'),
+    supabase
+      .from('departments')
+      .select('id, name, telegram_title_ar, telegram_help_message')
+      .order('name'),
     supabase
       .from('telegram_command_users')
       .select('id, telegram_id, telegram_username, created_at')

@@ -6,18 +6,21 @@ export type Database = {
           id: string
           name: string
           telegram_title_ar: string
+          telegram_help_message: string | null
           created_at: string
         }
         Insert: {
           id?: string
           name: string
           telegram_title_ar?: string
+          telegram_help_message?: string | null
           created_at?: string
         }
         Update: {
           id?: string
           name?: string
           telegram_title_ar?: string
+          telegram_help_message?: string | null
           created_at?: string
         }
         Relationships: []

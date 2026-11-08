@@ -29,7 +29,7 @@ type Member = Pick<
 }
 type Department = Pick<
   Database['public']['Tables']['departments']['Row'],
-  'id' | 'name' | 'telegram_title_ar'
+  'id' | 'name' | 'telegram_title_ar' | 'telegram_help_message'
 >
 type TelegramCommandUser = Pick<
   Database['public']['Tables']['telegram_command_users']['Row'],
@@ -65,7 +65,7 @@ type MemberFormProps = {
 
 type DepartmentFormProps = {
   department: Department | null
-  onSave: (input: Pick<Department, 'name' | 'telegram_title_ar'>) => Promise<void>
+  onSave: (input: Pick<Department, 'name' | 'telegram_title_ar' | 'telegram_help_message'>) => Promise<void>
   onClose: () => void
 }
 
@@ -163,7 +163,7 @@ export function MembersApp({
     router.refresh()
   }
 
-  async function saveDepartment(input: Pick<Department, 'name' | 'telegram_title_ar'>) {
+  async function saveDepartment(input: Pick<Department, 'name' | 'telegram_title_ar' | 'telegram_help_message'>) {
     const supabase = createClient()
     const result = editingDepartment
       ? await supabase.from('departments').update(input).eq('id', editingDepartment.id)
@@ -864,6 +864,7 @@ function MemberForm({ member, departments, onSave, onClose }: MemberFormProps) {
 function DepartmentForm({ department, onSave, onClose }: DepartmentFormProps) {
   const [name, setName] = useState(department?.name ?? '')
   const [telegramTitle, setTelegramTitle] = useState(department?.telegram_title_ar ?? '')
+  const [telegramHelpMessage, setTelegramHelpMessage] = useState(department?.telegram_help_message ?? '')
   const [error, setError] = useState('')
   const [saving, setSaving] = useState(false)
 
@@ -872,7 +873,11 @@ function DepartmentForm({ department, onSave, onClose }: DepartmentFormProps) {
     setSaving(true)
     setError('')
     try {
-      await onSave({ name: name.trim(), telegram_title_ar: telegramTitle.trim() })
+      await onSave({
+        name: name.trim(),
+        telegram_title_ar: telegramTitle.trim(),
+        telegram_help_message: telegramHelpMessage.trim() || null,
+      })
     } catch (caughtError) {
       setError(caughtError instanceof Error ? caughtError.message : 'Unable to save department.')
     } finally {
@@ -888,6 +893,15 @@ function DepartmentForm({ department, onSave, onClose }: DepartmentFormProps) {
         <input id="department-name" value={name} onChange={(event) => setName(event.target.value)} placeholder="e.g. Operations" autoFocus required maxLength={100} />
         <label htmlFor="department-telegram-title">Arabic Telegram title <span className="required-mark">*</span></label>
         <input id="department-telegram-title" dir="rtl" lang="ar" value={telegramTitle} onChange={(event) => setTelegramTitle(event.target.value)} placeholder="نــداء الى أعضاء الوحدة" required maxLength={160} />
+        <label htmlFor="department-telegram-help">Custom /help message <span className="optional-label">Optional</span></label>
+        <input
+          id="department-telegram-help"
+          value={telegramHelpMessage}
+          onChange={(event) => setTelegramHelpMessage(event.target.value)}
+          placeholder={`Default: Tag members in ${name || 'this department'}`}
+          maxLength={160}
+        />
+        <p className="form-hint">Shown next to this department’s command in /help and Telegram’s command menu.</p>
         {error && <p className="form-error" role="alert">{error}</p>}
         <div className="modal-actions">
           <button className="secondary-button" type="button" onClick={onClose} disabled={saving}>Cancel</button>

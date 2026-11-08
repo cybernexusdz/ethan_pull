@@ -243,6 +243,13 @@
   color: #a4aabd;
 }
 
+.form-hint {
+  margin: -4px 0 2px;
+  color: #828aa0;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
 .password-label {
   margin-top: 8px;
 }
